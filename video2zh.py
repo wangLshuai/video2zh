@@ -132,12 +132,20 @@ def transcribe(wav, model_name):
             compute_type="int8",
             cpu_threads=os.cpu_count() or 4,
         )
-    segments, info = model.transcribe(data, beam_size=5, vad_filter=True)
+    segments, info = model.transcribe(
+        data, beam_size=5, vad_filter=True, word_timestamps=True
+    )
     print(
         f"转写完成: 语言={info.language} (置信度 {info.language_probability:.2f})",
         flush=True,
     )
-    return [f"{s.start:.2f}\t{s.end:.2f}\t{s.text.strip()}" for s in segments]
+    lines = []
+    for s in segments:
+        a, b = s.start, s.end
+        if s.words:  # 用词级时间戳取真实语音边界, 而不是相邻段的边界
+            a, b = s.words[0].start, s.words[-1].end
+        lines.append([max(0.0, a), b, s.text.strip()])
+    return [f"{a:.2f}\t{b:.2f}\t{t}" for a, b, t in lines]
 
 
 def sanitize_tsv(line):
@@ -348,7 +356,6 @@ def main():
         lines = transcribe(wav, args.model)
         with open(f"{outdir}/{stem}_transcript.tsv", "w", encoding="utf-8") as f:
             f.write("\n".join(lines) + "\n")
-
         print("3/5 claude 翻译 ...", flush=True)
         zh_lines = translate(lines, args.batch)
         with open(f"{outdir}/{stem}_translation_zh.tsv", "w", encoding="utf-8") as f:
@@ -431,11 +438,7 @@ def main():
             "_transcript.tsv",
             "_translation_zh.tsv",
         ]:
-            path = (
-                f"{outdir}/{stem} {name}"
-                if name == "中文配音.mp4"
-                else f"{outdir}/{stem}{name}"
-            )
+            path = f"{outdir}/{stem}{name}"
             size = os.path.getsize(path) / 1048576
             print(f"  {path}  ({size:.1f} MB)", flush=True)
     finally:
