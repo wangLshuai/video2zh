@@ -3,7 +3,7 @@
 
 用法:
   video2zh.py <视频文件> [--outdir 输出目录] [--model medium] [--voice zh-CN-YunyangNeural]
-             [--batch 60] [--no-mux] [--keep-temp]
+             [--batch 60] [--keep-temp]
 
 步骤:
   1. ffmpeg 提取 16kHz 单声道音频
@@ -327,16 +327,13 @@ def main():
     ap.add_argument("--outdir", default=None, help="输出目录（默认与视频同目录）")
     ap.add_argument(
         "--model",
-        default="medium",
+        default="large-v3",
         help="Whisper 模型 (tiny/base/small/medium/large-v3)",
     )
     ap.add_argument("--voice", default="zh-CN-YunyangNeural", help="edge-tts 音色")
     ap.add_argument("--batch", type=int, default=60, help="每次 claude 翻译的行数")
-    ap.add_argument(
-        "--no-mux", action="store_true", help="只生成音频和字幕，不合成视频"
-    )
     ap.add_argument("--keep-temp", action="store_true", help="保留中间文件")
-    ap.add_argument("--no-tts", action="store_true", help="不进行tts 步骤")
+    ap.add_argument("--tts", action="store_true", help="进行tts 步骤")
     args = ap.parse_args()
 
     video = os.path.abspath(args.video)
@@ -361,8 +358,11 @@ def main():
         with open(f"{outdir}/{stem}_translation_zh.tsv", "w", encoding="utf-8") as f:
             f.write("\n".join(zh_lines) + "\n")
         write_srt(zh_lines, f"{outdir}/{stem}_zh.srt")
+        
+        print("4/5 合成 ...", flush=True)
         out_video = f"{outdir}/{stem}_zh.mp4"
-        if not args.no_tts:
+        srt = f"{outdir}/{stem}_zh.srt"
+        if args.tts:
             print("4/5 edge-tts 配音合成与对齐 ...", flush=True)
             segs = []
             for l in zh_lines:
@@ -374,36 +374,42 @@ def main():
             dur = video_duration(video)
             synced_m4a = build_and_encode(segs, segdir, dur, outdir, stem, tmp)
             print("5/5 合成视频 ...", flush=True)
-            if not args.no_mux:
-
-                p = run(
-                    [
-                        "ffmpeg",
-                        "-y",
-                        "-v",
-                        "error",
-                        "-i",
-                        video,
-                        "-i",
-                        synced_m4a,
-                        "-map",
-                        "0:v",
-                        "-map",
-                        "1:a",
-                        "-c:v",
-                        "copy",
-                        "-c:a",
-                        "copy",
-                        "-shortest",
-                        out_video,
-                    ]
-                )
-                if p.returncode != 0:
-                    raise SystemExit(f"合成视频失败: {p.stderr.strip()[:300]}")
+            p = run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-v",
+                    "error",
+                    "-i",
+                    video,
+                    "-i",
+                    synced_m4a,
+                    "-i",
+                    srt,
+                    "-map",
+                    "0:v",
+                    "-map",
+                    "1:a",
+                    "-c:v",
+                    "copy",
+                    "-c:a",
+                    "copy",
+                    "-shortest",
+                    "-map",
+                    "2:s:0",
+                    "-c:s",
+                    "mov_text",
+                    "-disposition:s:0",
+                    "default",
+                    "-metadata:s:s:0",
+                    "language=chi",
+                    out_video,
+                ]
+            )
+            if p.returncode != 0:
+                raise SystemExit(f"合成视频失败: {p.stderr.strip()[:300]}")
         else:
-            print("加入字幕")
-            srt = f"{outdir}/{stem}_zh.srt"
-            vf = "subtitles='" + srt.replace("'", r"'\''") + "'"
+            print("4/5 不加入tts,仅加入字幕")
             p = run(
                 # ["ffmpeg", "-i", video, "-vf", vf, "-c:a", "copy", out_video]
                 [
@@ -433,7 +439,7 @@ def main():
                 raise SystemExit(f"合成视频失败: {p.stderr}")
 
         print("\n完成。产物:", flush=True)
-        for name in (["_zh.mp4"] if not args.no_mux else []) + [
+        for name in ["_zh.mp4",
             "_zh.srt",
             "_transcript.tsv",
             "_translation_zh.tsv",

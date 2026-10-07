@@ -21,17 +21,16 @@
 --outdir ~/video/out      # 输出目录（默认与视频同目录）
 --voice zh-CN-XiaoxiaoNeural   # 换女声（默认 zh-CN-YunyangNeural 男声）
 --model small              # 转写更快、精度略低（默认 medium；large-v3 最准）
---no-mux                   # 只出音频+字幕，不合成视频
+--tts                      # 合成语音，默认不合成
 ```
 
 ## 产物（与视频同目录）
 
 | 文件 | 说明 |
 |------|------|
-| `<名称> 中文配音.mp4` | 成品：原视频轨 + 按原时间点对齐的中文配音 |
-| `<名称>_zh_narration.mp3` | 连续版纯配音（通读，无停顿） |
+| `<名称>_zh.mp4` | 成品
 | `<名称>_zh.srt` | 中文字幕 |
-| `<名称>_transcript_en.tsv` | 原文转写（含时间戳） |
+| `<名称>_transcript.tsv` | 原文转写（含时间戳） |
 | `<名称>_translation_zh.tsv` | 中文翻译（含时间戳） |
 
 ## 说明
