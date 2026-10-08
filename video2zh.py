@@ -62,9 +62,8 @@ TRANSLATE_PROMPT = (
     "必须保持三列制表符分隔的格式完全不变，只翻译第三列的文本内容。要求："
     "1) 只输出翻译后的行，不要任何解释、标题或代码块；"
     "2) 输出行数必须与输入行数完全相同；"
-    '3) 数字写成中文读法（如 72 写成"七十二"）；'
-    "4) 专业术语使用标准译法（如 bevel gear=锥齿轮，pinion=小齿轮，module=模数，"
-    "sketch=草图，boolean=布尔，workbench=工作台，pitch circle=节圆，backlash=侧隙）。"
+    "3) 在满足上述条件的同时，要注意到，文本是视频字幕，时间接近的几行可能是一句话，"
+    "所以，要结合上下文，考虑中文的语序和语法，为了语义和通顺调整一下文本的顺序。"
 )
 
 
@@ -314,8 +313,8 @@ def build_and_encode(segs, segdir, dur, outdir, stem, tmp):
 
 def write_srt(lines, path):
     with open(
-        path, "w", encoding="utf-8-sig"
-    ) as f:  # 带 BOM, 避免 VLC 等播放器编码检测失败
+        path, "w", encoding="utf-8"
+    ) as f:
         for i, line in enumerate(lines, 1):
             a, b, text = line.split("\t", 2)
             f.write(f"{i}\n{srt_time(float(a))} --> {srt_time(float(b))}\n{text}\n\n")
@@ -345,25 +344,25 @@ def main():
     tmp = tempfile.mkdtemp(prefix="video2zh-")
     try:
         print(f"输入: {video}", flush=True)
-        print("1/5 提取音频 ...", flush=True)
+        print("1/4 提取音频 ...", flush=True)
         wav = f"{tmp}/audio.wav"
         extract_audio(video, wav)
 
-        print("2/5 语音转写 ...", flush=True)
+        print("2/4 语音转写 ...", flush=True)
         lines = transcribe(wav, args.model)
         with open(f"{outdir}/{stem}_transcript.tsv", "w", encoding="utf-8") as f:
             f.write("\n".join(lines) + "\n")
-        print("3/5 claude 翻译 ...", flush=True)
+        print("3/4 claude 翻译 ...", flush=True)
         zh_lines = translate(lines, args.batch)
         with open(f"{outdir}/{stem}_translation_zh.tsv", "w", encoding="utf-8") as f:
             f.write("\n".join(zh_lines) + "\n")
         write_srt(zh_lines, f"{outdir}/{stem}_zh.srt")
-        
-        print("4/5 合成 ...", flush=True)
+
+        print("4/4 合成 ...", flush=True)
         out_video = f"{outdir}/{stem}_zh.mp4"
         srt = f"{outdir}/{stem}_zh.srt"
         if args.tts:
-            print("4/5 edge-tts 配音合成与对齐 ...", flush=True)
+            print("4.1/4 edge-tts 配音合成与对齐 ...", flush=True)
             segs = []
             for l in zh_lines:
                 a, b, text = l.split("\t", 2)
@@ -373,7 +372,19 @@ def main():
             asyncio.run(synth_all(segs, segdir, args.voice))
             dur = video_duration(video)
             synced_m4a = build_and_encode(segs, segdir, dur, outdir, stem, tmp)
-            print("5/5 合成视频 ...", flush=True)
+            print("4.2/4 demucs 分离背景音 ...", flush=True)
+            p = run(
+                [
+                    "demucs",
+                    "-j",
+                    "16",
+                    "--two-stems=vocals",
+                    video,
+                ]
+                )
+            if p.returncode != 0:
+                raise SystemExit(f"demucs 分离声音失败: {p.stderr.strip()[:300]}")
+            print("4.3/4 合成视频 ...", flush=True)
             p = run(
                 [
                     "ffmpeg",
@@ -386,13 +397,17 @@ def main():
                     synced_m4a,
                     "-i",
                     srt,
+                    "-i",
+                    f"./separated/htdemucs/{stem}/no_vocals.wav",
+                    "-filter_complex",
+                    "[1:a][3:a]amix=inputs=2:duration=first:dropout_transition=0[aout]", # 第1,3个输入文件混音，输出打标签aout
+                    "-map",
+                    "[aout]",
+                    "-c:a",
+                    "aac",
                     "-map",
                     "0:v",
-                    "-map",
-                    "1:a",
                     "-c:v",
-                    "copy",
-                    "-c:a",
                     "copy",
                     "-shortest",
                     "-map",
@@ -409,9 +424,8 @@ def main():
             if p.returncode != 0:
                 raise SystemExit(f"合成视频失败: {p.stderr.strip()[:300]}")
         else:
-            print("4/5 不加入tts,仅加入字幕")
+            print("4/4 不加入tts,仅加入字幕")
             p = run(
-                # ["ffmpeg", "-i", video, "-vf", vf, "-c:a", "copy", out_video]
                 [
                     "ffmpeg",
                     "-i",
@@ -439,7 +453,8 @@ def main():
                 raise SystemExit(f"合成视频失败: {p.stderr}")
 
         print("\n完成。产物:", flush=True)
-        for name in ["_zh.mp4",
+        for name in [
+            "_zh.mp4",
             "_zh.srt",
             "_transcript.tsv",
             "_translation_zh.tsv",
